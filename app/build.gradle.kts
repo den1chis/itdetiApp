@@ -27,12 +27,9 @@ android {
         versionCode = 1
         versionName = "1.0"
 
-        buildConfigField("String", "ITDETI_EMAIL", "\"${localProperty("ITDETI_EMAIL")}\"")
-        buildConfigField("String", "ITDETI_PASSWORD", "\"${localProperty("ITDETI_PASSWORD")}\"")
-    }
-
-    buildFeatures {
-        buildConfig = true
+        // Keep credentials as Android string resources so Kotlin always receives String.
+        resValue("string", "itdeti_email", localProperty("ITDETI_EMAIL"))
+        resValue("string", "itdeti_password", localProperty("ITDETI_PASSWORD"))
     }
 
     buildTypes {
