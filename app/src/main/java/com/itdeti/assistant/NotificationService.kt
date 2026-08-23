@@ -3,9 +3,7 @@ package com.itdeti.assistant
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.app.Service
 import android.content.Context
-import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.service.notification.NotificationListenerService
@@ -15,6 +13,7 @@ import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -59,8 +58,8 @@ class NotificationService : NotificationListenerService() {
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         super.onNotificationPosted(sbn)
 
-        val packageName = sbn.packageName ?: return
-        if (packageName == packageName()) return
+        val packageName = sbn.packageName
+        if (packageName == applicationContext.packageName) return
 
         val notification = sbn.notification ?: return
         val extras = notification.extras ?: Bundle.EMPTY
@@ -78,8 +77,6 @@ class NotificationService : NotificationListenerService() {
         saveToLog(source, title, message)
         sendToServer(source, title, message)
     }
-
-    private fun packageName(): String = applicationContext.packageName
 
     private fun detectSource(packageName: String): String {
         return when {
@@ -113,10 +110,9 @@ class NotificationService : NotificationListenerService() {
     private fun getToken(): String {
         if (authToken.isNotBlank()) return authToken
 
-        // BuildConfig may be generated differently by Gradle depending on local values.
-        // Convert explicitly to String so numeric-looking credentials are also accepted.
-        val email = BuildConfig.ITDETI_EMAIL.toString()
-        val password = BuildConfig.ITDETI_PASSWORD.toString()
+        // Force the generated BuildConfig values to Kotlin String values.
+        val email: String = "${BuildConfig.ITDETI_EMAIL}"
+        val password: String = "${BuildConfig.ITDETI_PASSWORD}"
 
         if (email.isBlank() || password.isBlank()) {
             Log.e(TAG, "Не заданы ITDETI_EMAIL / ITDETI_PASSWORD в local.properties")
@@ -136,7 +132,7 @@ class NotificationService : NotificationListenerService() {
                 .build()
 
             client.newCall(request).execute().use { response ->
-                val responseBody = response.body?.string() ?: ""
+                val responseBody = response.body?.string().orEmpty()
                 if (response.code == 200) {
                     authToken = JSONObject(responseBody).optString("access_token", "")
                     Log.d(TAG, "Token received")
@@ -166,11 +162,13 @@ class NotificationService : NotificationListenerService() {
                 var response = postNotification(token, json)
 
                 if (response.code == 401) {
+                    response.close()
                     authToken = ""
                     token = getToken()
                     if (token.isNotBlank()) {
-                        response.close()
                         response = postNotification(token, json)
+                    } else {
+                        return@launch
                     }
                 }
 
@@ -178,7 +176,10 @@ class NotificationService : NotificationListenerService() {
                     val body = it.body?.string().orEmpty()
                     Log.d(TAG, "Server response: ${it.code} $body")
                     if (it.isSuccessful) {
-                        showResultNotification("Уведомление обработано", body.ifBlank { "ITdeti получил уведомление" })
+                        showResultNotification(
+                            "Уведомление обработано",
+                            body.ifBlank { "ITdeti получил уведомление" }
+                        )
                     }
                 }
             } catch (e: Exception) {
@@ -233,7 +234,7 @@ class NotificationService : NotificationListenerService() {
     }
 
     override fun onDestroy() {
-        scope.coroutineContext.cancel()
+        scope.cancel()
         super.onDestroy()
     }
 }
