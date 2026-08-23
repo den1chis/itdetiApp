@@ -11,14 +11,15 @@ if (localPropertiesFile.exists()) {
     localPropertiesFile.inputStream().use { localProperties.load(it) }
 }
 
-fun buildConfigString(name: String): String {
-    val value = localProperties.getProperty(name, "")
+fun escapedLocalProperty(name: String): String {
+    return localProperties.getProperty(name, "")
         .replace("\\", "\\\\")
         .replace("\"", "\\\"")
         .replace("\n", "\\n")
         .replace("\r", "\\r")
-    return "\"$value\""
 }
+
+fun buildConfigString(name: String): String = "\"${escapedLocalProperty(name)}\""
 
 android {
     namespace = "com.itdeti.assistant"
@@ -33,6 +34,11 @@ android {
 
         buildConfigField("String", "ITDETI_EMAIL", buildConfigString("ITDETI_EMAIL"))
         buildConfigField("String", "ITDETI_PASSWORD", buildConfigString("ITDETI_PASSWORD"))
+
+        // Runtime strings are used by NotificationService. R.string.* is an Int resource ID,
+        // therefore Kotlin must obtain the actual value through Context.getString().
+        resValue("string", "itdeti_email", escapedLocalProperty("ITDETI_EMAIL"))
+        resValue("string", "itdeti_password", escapedLocalProperty("ITDETI_PASSWORD"))
     }
 
     buildFeatures {
