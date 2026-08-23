@@ -107,15 +107,11 @@ class NotificationService : NotificationListenerService() {
         prefs.edit().putString("log", entry + current).apply()
     }
 
-    private fun getApiCredential(resourceId: Int): String {
-        return applicationContext.resources.getString(resourceId).trim()
-    }
-
     private fun getToken(): String {
         if (authToken.isNotBlank()) return authToken
 
-        val email = getApiCredential(R.string.itdeti_email)
-        val password = getApiCredential(R.string.itdeti_password)
+        val email: String = BuildConfig.ITDETI_EMAIL
+        val password: String = BuildConfig.ITDETI_PASSWORD
 
         if (email.isBlank() || password.isBlank()) {
             Log.e(TAG, "Не заданы ITDETI_EMAIL / ITDETI_PASSWORD в local.properties")
@@ -172,6 +168,7 @@ class NotificationService : NotificationListenerService() {
                 client.newCall(request).execute().use { response ->
                     val responseBody = response.body?.string().orEmpty()
                     Log.d(TAG, "Server response: ${response.code} $responseBody")
+
                     if (response.code == 401) {
                         authToken = ""
                         token = getToken()
@@ -223,7 +220,9 @@ class NotificationService : NotificationListenerService() {
         val manager = getSystemService(NotificationManager::class.java)
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("ITdeti Assistant")
-            .setContentText(if (success) "Уведомление обработано" else "Не удалось отправить уведомление")
+            .setContentText(
+                if (success) "Уведомление обработано" else "Не удалось отправить уведомление"
+            )
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setAutoCancel(true)
             .build()
