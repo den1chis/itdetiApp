@@ -1,7 +1,25 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
+
+val localProperties = Properties()
+val localPropertiesFile = rootProject.file("local.properties")
+if (localPropertiesFile.exists()) {
+    localPropertiesFile.inputStream().use { localProperties.load(it) }
+}
+
+fun escapedLocalProperty(name: String): String {
+    return localProperties.getProperty(name, "")
+        .replace("\\", "\\\\")
+        .replace("\"", "\\\"")
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+}
+
+fun buildConfigString(name: String): String = "\"${escapedLocalProperty(name)}\""
 
 android {
     namespace = "com.itdeti.assistant"
@@ -13,6 +31,15 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
+
+        // Credentials exist only in the local build and are exposed to Kotlin
+        // as actual String constants through BuildConfig.
+        buildConfigField("String", "ITDETI_EMAIL", buildConfigString("ITDETI_EMAIL"))
+        buildConfigField("String", "ITDETI_PASSWORD", buildConfigString("ITDETI_PASSWORD"))
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     buildTypes {
@@ -35,11 +62,7 @@ dependencies {
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.appcompat:appcompat:1.6.1")
     implementation("com.google.android.material:material:1.11.0")
-
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
-
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
-
-    // Фоновая синхронизация расписания
     implementation("androidx.work:work-runtime-ktx:2.9.0")
 }

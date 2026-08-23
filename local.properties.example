@@ -1,0 +1,5 @@
+# Copy these two properties into local.properties on your PC.
+# local.properties is ignored by git and must not be committed.
+
+ITDETI_EMAIL=your_teacher_email@example.com
+ITDETI_PASSWORD=your_teacher_password
