@@ -13,11 +13,8 @@ import java.time.Instant
 import java.util.concurrent.TimeUnit
 
 object ItdetiApi {
-
     private const val TAG = "itdeti_API"
-
     private const val BASE_URL = "https://itdeti.onrender.com"
-
     private const val LOGIN_URL = "$BASE_URL/auth/login"
     private const val UPCOMING_URL = "$BASE_URL/schedule/upcoming"
 
@@ -39,9 +36,8 @@ object ItdetiApi {
     fun syncUpcoming(days: Int = 7): List<ScheduleEvent> {
         return try {
             val token = getToken()
-
             if (token.isBlank()) {
-                Log.e(TAG, "Не удалось получить JWT. Проверьте ITDETI_EMAIL и ITDETI_PASSWORD в local.properties")
+                Log.e(TAG, "Не удалось получить JWT")
                 return emptyList()
             }
 
@@ -51,19 +47,15 @@ object ItdetiApi {
                 .get()
                 .build()
 
-            val response = client.newCall(request).execute()
-            val responseCode = response.code
-            val responseBody = response.body?.string() ?: ""
-            response.close()
-
-            Log.d(TAG, "Upcoming response: $responseCode")
-
-            if (responseCode !in 200..299) {
-                Log.e(TAG, "Ошибка получения расписания: $responseBody")
-                return emptyList()
+            client.newCall(request).execute().use { response ->
+                val responseBody = response.body?.string().orEmpty()
+                Log.d(TAG, "Upcoming response: ${response.code}")
+                if (response.code !in 200..299) {
+                    Log.e(TAG, "Ошибка получения расписания: $responseBody")
+                    return emptyList()
+                }
+                parseEvents(responseBody)
             }
-
-            parseEvents(responseBody)
         } catch (e: Exception) {
             Log.e(TAG, "Ошибка синхронизации", e)
             emptyList()
@@ -72,39 +64,26 @@ object ItdetiApi {
 
     private fun getToken(): String {
         if (authToken.isNotBlank()) return authToken
-
-        if (email.isBlank() || password.isBlank()) {
-            Log.e(TAG, "Не заданы ITDETI_EMAIL / ITDETI_PASSWORD в local.properties")
-            return ""
-        }
+        if (email.isBlank() || password.isBlank()) return ""
 
         return try {
             val json = JSONObject().apply {
                 put("email", email)
                 put("password", password)
             }
+            val body = json.toString().toRequestBody("application/json".toMediaType())
+            val request = Request.Builder().url(LOGIN_URL).post(body).build()
 
-            val body = json.toString()
-                .toRequestBody("application/json".toMediaType())
-
-            val request = Request.Builder()
-                .url(LOGIN_URL)
-                .post(body)
-                .build()
-
-            val response = client.newCall(request).execute()
-            val responseCode = response.code
-            val responseBody = response.body?.string() ?: ""
-            response.close()
-
-            if (responseCode != 200) {
-                Log.e(TAG, "Login error: $responseCode $responseBody")
-                return ""
+            client.newCall(request).execute().use { response ->
+                val responseBody = response.body?.string().orEmpty()
+                if (response.code != 200) {
+                    Log.e(TAG, "Login error: ${response.code} $responseBody")
+                    return ""
+                }
+                authToken = JSONObject(responseBody).optString("access_token", "")
+                Log.d(TAG, "JWT получен")
+                authToken
             }
-
-            authToken = JSONObject(responseBody).optString("access_token", "")
-            Log.d(TAG, "JWT получен")
-            authToken
         } catch (e: Exception) {
             Log.e(TAG, "Ошибка авторизации", e)
             ""
@@ -113,7 +92,6 @@ object ItdetiApi {
 
     private fun parseEvents(responseBody: String): List<ScheduleEvent> {
         val result = mutableListOf<ScheduleEvent>()
-
         try {
             val array = when {
                 responseBody.trim().startsWith("[") -> JSONArray(responseBody)
@@ -131,37 +109,16 @@ object ItdetiApi {
 
             for (i in 0 until array.length()) {
                 val obj = array.getJSONObject(i)
-
-                val itemId = obj.optString(
-                    "item_id",
-                    obj.optString("id", "")
-                )
+                val itemId = obj.optString("item_id", obj.optString("id", ""))
                 if (itemId.isBlank()) continue
-
-                val itemType = obj.optString(
-                    "item_type",
-                    obj.optString("type", "event")
-                )
-
-                val title = obj.optString(
-                    "title",
-                    when (itemType) {
-                        "lesson" -> "Урок"
-                        else -> "Событие"
-                    }
-                )
-
+                val itemType = obj.optString("item_type", obj.optString("type", "event"))
+                val title = obj.optString("title", if (itemType == "lesson") "Урок" else "Событие")
                 val studentName = obj.optString("student_name", null)
                 val lessonKind = obj.optString("lesson_kind", null)
                 val startTimeString = obj.optString("start_time", "")
                 if (startTimeString.isBlank()) continue
-
                 val startTime = parseDateTime(startTimeString)
-                if (startTime <= 0L) {
-                    Log.e(TAG, "Не удалось распознать дату: $startTimeString")
-                    continue
-                }
-
+                if (startTime <= 0L) continue
                 val endTime = obj.optString("end_time", "")
                     .takeIf { it.isNotBlank() }
                     ?.let { parseDateTime(it) }
@@ -181,7 +138,6 @@ object ItdetiApi {
         } catch (e: Exception) {
             Log.e(TAG, "Ошибка разбора расписания", e)
         }
-
         return result
     }
 
