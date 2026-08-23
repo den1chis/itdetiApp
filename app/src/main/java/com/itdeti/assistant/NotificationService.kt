@@ -20,6 +20,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
+import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 
 class NotificationService : NotificationListenerService() {
@@ -28,17 +29,20 @@ class NotificationService : NotificationListenerService() {
         private const val TAG = "itdeti_NS"
         private const val SERVER_URL = "https://itdeti.onrender.com/notifications"
         private const val LOGIN_URL = "https://itdeti.onrender.com/auth/login"
-        private const val EMAIL = "sdenmansss@gmail.com"
-        private const val PASSWORD = "GhjcnjqDen2552!"
         private const val ALERT_CHANNEL_ID = "itdeti_alerts"
         private const val ALERT_NOTIFICATION_ID = 2001
+        private const val DEDUPE_WINDOW_MS = 5_000L
+
         private val TARGET_PACKAGES = setOf(
             "com.whatsapp",
             "com.whatsapp.w4b",
             "kz.kaspi.mobile",
             "kz.kaspi.bank",
+            "com.samsung.android.messaging",
+            "com.google.android.apps.messaging",
             "org.telegram.messenger"
         )
+
         const val FOREGROUND_CHANNEL_ID = "itdeti_foreground"
         const val FOREGROUND_NOTIFICATION_ID = 1001
     }
@@ -46,9 +50,12 @@ class NotificationService : NotificationListenerService() {
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
         .build()
 
     private val scope = CoroutineScope(Dispatchers.IO)
+
+    @Volatile
     private var authToken: String = ""
 
     override fun onCreate() {
@@ -64,27 +71,35 @@ class NotificationService : NotificationListenerService() {
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         sbn ?: return
+
         val packageName = sbn.packageName
         if (packageName !in TARGET_PACKAGES) return
 
         val extras = sbn.notification?.extras ?: return
-        val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: ""
-        val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString() ?: ""
-        val bigText = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString() ?: ""
+        val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()?.trim().orEmpty()
+        val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()?.trim().orEmpty()
+        val bigText = extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString()?.trim().orEmpty()
         val body = bigText.ifEmpty { text }
+
         if (body.isBlank()) return
+        if (isDuplicate(packageName, title, body)) {
+            Log.d(TAG, "Duplicate notification ignored: $packageName / $title")
+            return
+        }
 
         val source = when {
             packageName.contains("whatsapp") -> "whatsapp"
             packageName.contains("kaspi") -> "kaspi"
-            packageName.contains("telegram") -> "telegram"
-            else -> packageName
+            packageName.contains("messaging") || packageName.contains("messages") -> "sms"
+            packageName.contains("telegram") -> "internal"
+            else -> return
         }
 
         Log.d(TAG, "[$source] $title: $body")
         saveToLog(source, title, body)
 
         val broadcastIntent = Intent("com.itdeti.NOTIFICATION_RECEIVED").apply {
+            setPackage(packageName = applicationContext.packageName)
             putExtra("source", source)
             putExtra("sender", title)
             putExtra("message", body)
@@ -93,6 +108,29 @@ class NotificationService : NotificationListenerService() {
         sendBroadcast(broadcastIntent)
 
         sendToServer(source, title, body)
+    }
+
+    private fun isDuplicate(packageName: String, title: String, body: String): Boolean {
+        val fingerprintSource = "$packageName\u0000$title\u0000$body"
+        val fingerprint = MessageDigest.getInstance("SHA-256")
+            .digest(fingerprintSource.toByteArray())
+            .joinToString("") { "%02x".format(it) }
+
+        val prefs = getSharedPreferences("itdeti_notification_state", Context.MODE_PRIVATE)
+        val lastFingerprint = prefs.getString("last_fingerprint", null)
+        val lastTime = prefs.getLong("last_time", 0L)
+        val now = System.currentTimeMillis()
+
+        val duplicate = lastFingerprint == fingerprint && now - lastTime < DEDUPE_WINDOW_MS
+
+        if (!duplicate) {
+            prefs.edit()
+                .putString("last_fingerprint", fingerprint)
+                .putLong("last_time", now)
+                .apply()
+        }
+
+        return duplicate
     }
 
     private fun saveToLog(source: String, sender: String, message: String) {
@@ -104,65 +142,107 @@ class NotificationService : NotificationListenerService() {
 
     private fun getToken(): String {
         if (authToken.isNotBlank()) return authToken
-        try {
+
+        val email = BuildConfig.ITDETI_EMAIL
+        val password = BuildConfig.ITDETI_PASSWORD
+
+        if (email.isBlank() || password.isBlank()) {
+            Log.e(TAG, "Не заданы ITDETI_EMAIL / ITDETI_PASSWORD в local.properties")
+            return ""
+        }
+
+        return try {
             val json = JSONObject().apply {
-                put("email", EMAIL)
-                put("password", PASSWORD)
+                put("email", email)
+                put("password", password)
             }
+
             val body = json.toString().toRequestBody("application/json".toMediaType())
             val request = Request.Builder()
                 .url(LOGIN_URL)
                 .post(body)
                 .build()
-            val response = client.newCall(request).execute()
-            val responseBody = response.body?.string() ?: ""
-            response.close()
-            if (response.code == 200) {
-                authToken = JSONObject(responseBody).getString("access_token")
-                Log.d(TAG, "Token received")
+
+            client.newCall(request).execute().use { response ->
+                val responseBody = response.body?.string() ?: ""
+                if (response.code == 200) {
+                    authToken = JSONObject(responseBody).optString("access_token", "")
+                    Log.d(TAG, "Token received")
+                } else {
+                    Log.e(TAG, "Login error: ${response.code} $responseBody")
+                }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Login error: ${e.message}")
+            Log.e(TAG, "Login error", e)
         }
+
         return authToken
     }
 
     private fun sendToServer(source: String, sender: String, message: String) {
         scope.launch {
             try {
-                val token = getToken()
-                val json = JSONObject().apply {
-                    put("source", source)
-                    put("sender", sender)
-                    put("raw_text", message)
-                    put("timestamp", System.currentTimeMillis())
+                var token = getToken()
+                if (token.isBlank()) return@launch
+
+                val response = sendRequest(token, source, sender, message)
+
+                if (response.code == 401) {
+                    authToken = ""
+                    token = getToken()
+                    if (token.isBlank()) return@launch
+
+                    response.close()
+                    val retryResponse = sendRequest(token, source, sender, message)
+                    handleServerResponse(retryResponse)
+                    return@launch
                 }
-                val body = json.toString().toRequestBody("application/json".toMediaType())
-                val request = Request.Builder()
-                    .url(SERVER_URL)
-                    .addHeader("Authorization", "Bearer $token")
-                    .post(body)
-                    .build()
 
-                val response = client.newCall(request).execute()
-                val responseBody = response.body?.string() ?: ""
-                Log.d(TAG, "Server response: ${response.code} $responseBody")
-                response.close()
-
-                if (response.code in 200..201 && responseBody.isNotBlank()) {
-                    val responseJson = JSONObject(responseBody)
-                    val requiresConfirmation = responseJson.optBoolean("requires_confirmation", false)
-                    val aiSummary = responseJson.optString("ai_summary", "")
-
-                    if (requiresConfirmation) {
-                        vibrate(longArrayOf(0, 200, 100, 200, 100, 200))
-                        showPushNotification(aiSummary)
-                    } else {
-                        vibrate(longArrayOf(0, 50))
-                    }
-                }
+                handleServerResponse(response)
             } catch (e: Exception) {
-                Log.e(TAG, "Server error: ${e.message}")
+                Log.e(TAG, "Server error", e)
+            }
+        }
+    }
+
+    private fun sendRequest(
+        token: String,
+        source: String,
+        sender: String,
+        message: String
+    ): okhttp3.Response {
+        val json = JSONObject().apply {
+            put("source", source)
+            put("sender_name", sender)
+            put("raw_text", message)
+        }
+
+        val body = json.toString().toRequestBody("application/json".toMediaType())
+        val request = Request.Builder()
+            .url(SERVER_URL)
+            .addHeader("Authorization", "Bearer $token")
+            .post(body)
+            .build()
+
+        return client.newCall(request).execute()
+    }
+
+    private fun handleServerResponse(response: okhttp3.Response) {
+        response.use {
+            val responseBody = it.body?.string() ?: ""
+            Log.d(TAG, "Server response: ${it.code} $responseBody")
+
+            if (it.code !in 200..201 || responseBody.isBlank()) return
+
+            val responseJson = JSONObject(responseBody)
+            val requiresConfirmation = responseJson.optBoolean("requires_confirmation", false)
+            val aiSummary = responseJson.optString("ai_summary", "Уведомление получено")
+
+            if (requiresConfirmation) {
+                vibrate(longArrayOf(0, 200, 100, 200, 100, 200))
+                showPushNotification(aiSummary)
+            } else {
+                vibrate(longArrayOf(0, 50))
             }
         }
     }
