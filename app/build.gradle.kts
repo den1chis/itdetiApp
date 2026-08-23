@@ -32,13 +32,10 @@ android {
         versionCode = 1
         versionName = "1.0"
 
+        // Credentials exist only in the local build and are exposed to Kotlin
+        // as actual String constants through BuildConfig.
         buildConfigField("String", "ITDETI_EMAIL", buildConfigString("ITDETI_EMAIL"))
         buildConfigField("String", "ITDETI_PASSWORD", buildConfigString("ITDETI_PASSWORD"))
-
-        // Runtime strings are used by NotificationService. R.string.* is an Int resource ID,
-        // therefore Kotlin must obtain the actual value through Context.getString().
-        resValue("string", "itdeti_email", escapedLocalProperty("ITDETI_EMAIL"))
-        resValue("string", "itdeti_password", escapedLocalProperty("ITDETI_PASSWORD"))
     }
 
     buildFeatures {
