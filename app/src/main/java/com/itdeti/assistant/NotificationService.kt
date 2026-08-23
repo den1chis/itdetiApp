@@ -110,9 +110,10 @@ class NotificationService : NotificationListenerService() {
     private fun getToken(): String {
         if (authToken.isNotBlank()) return authToken
 
-        // Force the generated BuildConfig values to Kotlin String values.
-        val email: String = "${BuildConfig.ITDETI_EMAIL}"
-        val password: String = "${BuildConfig.ITDETI_PASSWORD}"
+        // Read credentials from generated Android string resources.
+        // This avoids BuildConfig type inference problems during Kotlin compilation.
+        val email = getString(R.string.itdeti_email).trim()
+        val password = getString(R.string.itdeti_password)
 
         if (email.isBlank() || password.isBlank()) {
             Log.e(TAG, "Не заданы ITDETI_EMAIL / ITDETI_PASSWORD в local.properties")
