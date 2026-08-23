@@ -99,7 +99,7 @@ class NotificationService : NotificationListenerService() {
         saveToLog(source, title, body)
 
         val broadcastIntent = Intent("com.itdeti.NOTIFICATION_RECEIVED").apply {
-            setPackage(packageName = applicationContext.packageName)
+            setPackage(applicationContext.packageName)
             putExtra("source", source)
             putExtra("sender", title)
             putExtra("message", body)
@@ -188,11 +188,11 @@ class NotificationService : NotificationListenerService() {
                 val response = sendRequest(token, source, sender, message)
 
                 if (response.code == 401) {
+                    response.close()
                     authToken = ""
                     token = getToken()
                     if (token.isBlank()) return@launch
 
-                    response.close()
                     val retryResponse = sendRequest(token, source, sender, message)
                     handleServerResponse(retryResponse)
                     return@launch
