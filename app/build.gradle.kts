@@ -11,9 +11,14 @@ if (localPropertiesFile.exists()) {
     localPropertiesFile.inputStream().use { localProperties.load(it) }
 }
 
-val itdetiEmail = localProperties.getProperty("ITDETI_EMAIL", "")
-val itdetiPassword = localProperties.getProperty("ITDETI_PASSWORD", "")
-val quote = 34.toChar().toString()
+fun buildConfigString(name: String): String {
+    val value = localProperties.getProperty(name, "")
+        .replace("\\", "\\\\")
+        .replace("\"", "\\\"")
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+    return "\"$value\""
+}
 
 android {
     namespace = "com.itdeti.assistant"
@@ -26,8 +31,8 @@ android {
         versionCode = 1
         versionName = "1.0"
 
-        buildConfigField("String", "ITDETI_EMAIL", quote + itdetiEmail + quote)
-        buildConfigField("String", "ITDETI_PASSWORD", quote + itdetiPassword + quote)
+        buildConfigField("String", "ITDETI_EMAIL", buildConfigString("ITDETI_EMAIL"))
+        buildConfigField("String", "ITDETI_PASSWORD", buildConfigString("ITDETI_PASSWORD"))
     }
 
     buildFeatures {
