@@ -107,13 +107,15 @@ class NotificationService : NotificationListenerService() {
         prefs.edit().putString("log", entry + current).apply()
     }
 
+    private fun getApiCredential(resourceId: Int): String {
+        return applicationContext.resources.getString(resourceId).trim()
+    }
+
     private fun getToken(): String {
         if (authToken.isNotBlank()) return authToken
 
-        // Credentials are generated as Android string resources from local.properties.
-        // R.string.* itself is an Int resource ID, so getString() is required here.
-        val email = getString(R.string.itdeti_email).trim()
-        val password = getString(R.string.itdeti_password)
+        val email = getApiCredential(R.string.itdeti_email)
+        val password = getApiCredential(R.string.itdeti_password)
 
         if (email.isBlank() || password.isBlank()) {
             Log.e(TAG, "Не заданы ITDETI_EMAIL / ITDETI_PASSWORD в local.properties")
@@ -156,82 +158,73 @@ class NotificationService : NotificationListenerService() {
 
                 val json = JSONObject().apply {
                     put("source", source)
-                    put("sender_name", sender.ifBlank { source })
-                    put("raw_text", message.ifBlank { sender })
+                    put("sender_name", sender.ifBlank { null })
+                    put("raw_text", message)
                 }
 
-                var response = executeNotificationRequest(token, json)
+                val body = json.toString().toRequestBody("application/json".toMediaType())
+                var request = Request.Builder()
+                    .url(NOTIFICATIONS_URL)
+                    .addHeader("Authorization", "Bearer $token")
+                    .post(body)
+                    .build()
 
-                if (response.code == 401) {
-                    authToken = ""
-                    token = getToken()
-                    if (token.isBlank()) return@launch
-                    response.close()
-                    response = executeNotificationRequest(token, json)
-                }
+                client.newCall(request).execute().use { response ->
+                    val responseBody = response.body?.string().orEmpty()
+                    Log.d(TAG, "Server response: ${response.code} $responseBody")
+                    if (response.code == 401) {
+                        authToken = ""
+                        token = getToken()
+                        if (token.isBlank()) return@use
 
-                response.use {
-                    val responseBody = it.body?.string().orEmpty()
-                    Log.d(TAG, "Server response: ${it.code} $responseBody")
-                    if (it.isSuccessful) {
-                        showResultNotification("Уведомление обработано", responseBody)
+                        request = Request.Builder()
+                            .url(NOTIFICATIONS_URL)
+                            .addHeader("Authorization", "Bearer $token")
+                            .post(body)
+                            .build()
+
+                        client.newCall(request).execute().use { retryResponse ->
+                            val retryBody = retryResponse.body?.string().orEmpty()
+                            Log.d(TAG, "Server retry response: ${retryResponse.code} $retryBody")
+                            showResultNotification(retryResponse.code in 200..299)
+                        }
                     } else {
-                        Log.e(TAG, "Notification upload failed: ${it.code} $responseBody")
+                        showResultNotification(response.code in 200..299)
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Notification upload error", e)
+                Log.e(TAG, "Send notification error", e)
             }
         }
     }
 
-    private fun executeNotificationRequest(token: String, json: JSONObject) = client.newCall(
-        Request.Builder()
-            .url(NOTIFICATIONS_URL)
-            .addHeader("Authorization", "Bearer $token")
-            .post(json.toString().toRequestBody("application/json".toMediaType()))
-            .build()
-    ).execute()
-
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val manager = getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(
-                NotificationChannel(
-                    CHANNEL_ID,
-                    "ITdeti Assistant",
-                    NotificationManager.IMPORTANCE_LOW
-                )
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "ITdeti Assistant",
+                NotificationManager.IMPORTANCE_LOW
             )
+            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
     }
 
     private fun startForegroundNotification() {
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentTitle("ITdeti Assistant")
-            .setContentText("Слушаю уведомления")
+            .setContentText("Мониторинг уведомлений включён")
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setOngoing(true)
-            .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .build()
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(
-                FOREGROUND_ID,
-                notification,
-                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-            )
-        } else {
-            startForeground(FOREGROUND_ID, notification)
-        }
+        startForeground(FOREGROUND_ID, notification)
     }
 
-    private fun showResultNotification(title: String, text: String) {
+    private fun showResultNotification(success: Boolean) {
         val manager = getSystemService(NotificationManager::class.java)
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("ITdeti Assistant")
+            .setContentText(if (success) "Уведомление обработано" else "Не удалось отправить уведомление")
             .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setContentTitle(title)
-            .setContentText(text.take(200))
             .setAutoCancel(true)
             .build()
         manager.notify((System.currentTimeMillis() % Int.MAX_VALUE).toInt(), notification)
